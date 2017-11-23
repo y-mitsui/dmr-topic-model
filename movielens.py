@@ -1,14 +1,46 @@
 from __future__ import print_function
 import pandas as pd
-from scipy.sparse import coo_matrix
-from gensim.matutils import corpus2csc
+from gensim.matutils import corpus2csc, corpus2dense
 import dmr
 import sys
 import numpy as np
 import pickle
+from scipy.spatial.distance import cdist
 
+def get_rating_error(r, p, q):
+    return r - np.dot(p, q)
+
+def get_error(R, P, Q, beta):
+    error = 0.0
+    for i in xrange(len(R)):
+        for j in xrange(len(R[i])):
+            if R[i][j] == 0:
+                continue
+            error += pow(get_rating_error(R[i][j], P[:,i], Q[:,j]), 2)
+    error += beta/2.0 * (np.linalg.norm(P) + np.linalg.norm(Q))
+    return error
+
+def matrix_factorization(R, K, steps=1000, alpha=0.0002, beta=0.02, threshold=0.001):
+    P = np.random.rand(K, len(R))
+    Q = np.random.rand(K, len(R[0]))
+    for step in xrange(steps):
+        for i in xrange(len(R)):
+            for j in xrange(len(R[i])):
+                if R[i][j] == 0:
+                    continue
+                err = get_rating_error(R[i][j], P[:, i], Q[:, j])
+                for k in xrange(K):
+                    P[k][i] += alpha * (2 * err * Q[k][j])
+                    Q[k][j] += alpha * (2 * err * P[k][i])
+        error = get_error(R, P, Q, beta)
+        if error < threshold:
+            break
+        if (step + 1) % max(int(steps / 100), 1) == 0:
+            print("%d / %d %.4f"%(step + 1, steps, error))
+    return P.T, Q
+    
 if __name__ == "__main__":
-    n_top_movies = 1000
+    n_top_movies = 500
     ratings = pd.read_csv("data/ratings.csv")
     sort_voting = sorted(ratings.groupby("movieId")["userId"].count().to_dict().items(), key=lambda x:x[1], reverse=True)
     enable_movies = dict(zip([item[0] for item in sort_voting[:n_top_movies]], [True] * n_top_movies))
@@ -52,9 +84,19 @@ if __name__ == "__main__":
     print("matrix size:%d X %d"%(unique_item.shape[0], unique_user.shape[0]))
     print("feature dimentions:%d"%(unique_genre.shape[0]))
     
+    if False:
+        item_user = corpus2dense(corpus, len(user2idx)).T.astype(int)
+        W, H = matrix_factorization(item_user, 20, steps=150, alpha=0.002)
+        for i in [item2idx[m_id] for m_id, _ in sort_voting[:n_top_movies]]:
+            distances = cdist([W[i]], W)[0]
+            sort_idx = np.argsort(distances)
+            recom = ",".join([id2title[idx2item[idx]] for idx in sort_idx[sort_idx != i][:5]])
+            print("%s,%s"%(id2title[idx2item[i]], recom))
+        sys.exit(0)
+    
     if True:
         weights = np.array([1.] * len(features))
-        model = dmr.LDA(20, 81)
+        model = dmr.LDA(30, 81)
         item_user = corpus2csc(corpus).T.astype(int)
         model.fit(item_user, np.array(features), weights)
         
